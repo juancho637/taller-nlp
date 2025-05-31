@@ -1,335 +1,426 @@
 """
-ENTRENAMIENTO SEPARADO POR MODELOS
-Permite entrenar cada modelo independientemente con configuraciones específicas
+🏋️ ENTRENAMIENTO DE MODELOS TRANSFORMER
+=======================================
+
+Script para entrenar los modelos por separado.
+
+Uso:
+    python train.py --modelo 1    # Solo Modelo 1
+    python train.py --modelo 2    # Solo Modelo 2
+    python train.py --modelo all  # Ambos modelos
 """
 
-import os
-import argparse
 import tensorflow as tf
 from tensorflow import keras
-from keras.layers import TextVectorization
-import config
-from models.transformer_models import create_transformer_model_1, create_transformer_model_2
+from keras import layers
 import numpy as np
-import shutil
+import argparse
+import pickle
+import os
 
-def limpiar_modelos():
-    """
-    Limpiar modelos anteriores (opcional)
-    """
-    print("🧹 Limpiando modelos anteriores...")
-    
-    if os.path.exists(config.MODEL_SAVE_PATH):
-        shutil.rmtree(config.MODEL_SAVE_PATH)
-    
-    os.makedirs(config.MODEL_SAVE_PATH, exist_ok=True)
-    print("✅ Directorio limpio creado")
+# ============================================================================
+# CONFIGURACIÓN
+# ============================================================================
 
-def crear_dataset_optimizado():
-    """
-    Crear dataset con preprocesamiento mejorado
-    """
-    print("📊 Creando dataset optimizado...")
+class Config:
+    """Configuración para el entrenamiento"""
+    # Parámetros del modelo
+    VOCAB_SIZE = 5000           # Vocabulario de palabras
+    SEQUENCE_LENGTH = 60        # Longitud máxima de secuencia
+    EMBED_DIM = 128            # Dimensión de embeddings
+    NUM_HEADS = 4              # Cabezas de atención
+    LATENT_DIM = 256           # Dimensión de la capa densa
     
-    try:
-        if os.path.exists("../aclImdb"):
-            print("📁 Usando dataset aclImdb local...")
-            dataset = keras.utils.text_dataset_from_directory(
-                directory="../aclImdb", 
-                label_mode=None, 
-                batch_size=config.BATCH_SIZE
-            )
-            
-            # Limpieza mejorada
-            def limpiar_texto(text):
-                text = tf.strings.regex_replace(text, "<br />", " ")
-                text = tf.strings.regex_replace(text, "<br/>", " ")
-                text = tf.strings.regex_replace(text, "<.*?>", " ")
-                text = tf.strings.regex_replace(text, r"[^\w\s\.,!?']", " ")
-                text = tf.strings.regex_replace(text, r"\s+", " ")
-                text = tf.strings.lower(text)
-                return text
-            
-            dataset = dataset.map(limpiar_texto)
-            
-            # Filtrar por longitud
-            def filtrar_longitud(text):
-                length = tf.strings.length(text)
-                return tf.logical_and(length > 50, length < 1000)
-            
-            dataset = dataset.filter(filtrar_longitud)
-            sample_dataset = dataset.take(config.SAMPLE_SIZE // config.BATCH_SIZE)
-            
-        else:
-            print("📊 Usando dataset de TensorFlow...")
-            (x_train, y_train), _ = keras.datasets.imdb.load_data()
-            
-            word_index = keras.datasets.imdb.get_word_index()
-            reverse_word_index = dict([(value, key) for (key, value) in word_index.items()])
-            
-            def decode_review(text):
-                words = []
-                for i in text:
-                    word = reverse_word_index.get(i - 3, '')
-                    if word and len(word) > 1:
-                        words.append(word)
-                return ' '.join(words)
-            
-            text_data = []
-            for i in range(min(config.SAMPLE_SIZE, len(x_train))):
-                review_text = decode_review(x_train[i])
-                if len(review_text) > 50:
-                    text_data.append(review_text)
-            
-            sample_dataset = tf.data.Dataset.from_tensor_slices(text_data)
-            sample_dataset = sample_dataset.batch(config.BATCH_SIZE)
+    # Entrenamiento
+    BATCH_SIZE = 32
+    SAMPLE_SIZE = 2000         # Muestras del dataset
+    
+    # Configuración específica por modelo
+    MODEL1_EPOCHS = 15         # Modelo 1: Menos épocas, más estable
+    MODEL1_LR = 0.001         # Learning rate normal
+    
+    MODEL2_EPOCHS = 10         # Modelo 2: Pocas épocas para evitar overfitting
+    MODEL2_LR = 0.0005        # Learning rate más bajo
+
+# ============================================================================
+# CAPA PERSONALIZADA PARA EMBEDDINGS POSICIONALES
+# ============================================================================
+
+class PositionalEmbedding(layers.Layer):
+    """Capa personalizada para embeddings posicionales"""
+    
+    def __init__(self, sequence_length, vocab_size, embed_dim, **kwargs):
+        super().__init__(**kwargs)
+        self.sequence_length = sequence_length
+        self.vocab_size = vocab_size
+        self.embed_dim = embed_dim
         
-        print("✅ Dataset optimizado creado")
-        return sample_dataset
+        self.token_embeddings = layers.Embedding(vocab_size, embed_dim)
+        self.position_embeddings = layers.Embedding(sequence_length, embed_dim)
+    
+    def call(self, inputs):
+        length = tf.shape(inputs)[-1]
+        positions = tf.range(start=0, limit=length, delta=1)
         
-    except Exception as e:
-        print(f"❌ Error creando dataset: {e}")
-        raise
+        token_emb = self.token_embeddings(inputs)
+        pos_emb = self.position_embeddings(positions)
+        
+        return token_emb + pos_emb
+    
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "sequence_length": self.sequence_length,
+            "vocab_size": self.vocab_size,
+            "embed_dim": self.embed_dim,
+        })
+        return config
+    
+    @classmethod
+    def from_config(cls, config):
+        return cls(**config)
 
-def crear_o_cargar_vectorizador(dataset, force_new=False):
+# Registrar la capa personalizada de forma manual
+keras.utils.get_custom_objects()['PositionalEmbedding'] = PositionalEmbedding
+
+# ============================================================================
+# MODELO 1: TRANSFORMER SIMPLE (MÁS ESTABLE)
+# ============================================================================
+
+def create_model_1():
     """
-    Crear nuevo vectorizador o cargar existente
+    Modelo 1: Una sola capa Transformer
+    - Más estable y fácil de entrenar
+    - Menos parámetros, menos overfitting
+    - Recomendado para empezar
     """
-    vectorizer_path = f"{config.MODEL_SAVE_PATH}/vectorizer_config.npy"
-    weights_path = f"{config.MODEL_SAVE_PATH}/vectorizer_weights.npy"
+    print("🏗️ Creando Modelo 1 (Simple)...")
     
-    if not force_new and os.path.exists(vectorizer_path) and os.path.exists(weights_path):
-        print("📂 Cargando vectorizador existente...")
-        try:
-            vectorizer_config = np.load(vectorizer_path, allow_pickle=True).item()
-            vectorizer_weights = np.load(weights_path, allow_pickle=True)
-            
-            text_vectorization = TextVectorization(
-                max_tokens=vectorizer_config['max_tokens'],
-                output_mode=vectorizer_config['output_mode'],
-                output_sequence_length=vectorizer_config['output_sequence_length']
-            )
-            
-            # Adaptar con dataset actual
-            text_vectorization.adapt(dataset)
-            
-            # Cargar pesos si existen
-            if len(vectorizer_weights) > 0:
-                text_vectorization.set_weights(vectorizer_weights)
-            
-            vocabulary = text_vectorization.get_vocabulary()
-            print(f"✅ Vectorizador cargado: {len(vocabulary)} tokens")
-            return text_vectorization
-            
-        except Exception as e:
-            print(f"⚠️ Error cargando vectorizador existente: {e}")
-            print("🔄 Creando vectorizador nuevo...")
+    inputs = keras.Input(shape=(None,), dtype="int32")
     
-    # Crear vectorizador nuevo
-    print("🔤 Creando vectorizador nuevo...")
-    text_vectorization = TextVectorization(
-        max_tokens=config.VOCAB_SIZE,
-        output_mode="int",
-        output_sequence_length=config.SEQUENCE_LENGTH,
-        standardize='lower_and_strip_punctuation',
-        split='whitespace'
+    # Embeddings de tokens y posiciones usando la capa personalizada
+    x = PositionalEmbedding(
+        sequence_length=Config.SEQUENCE_LENGTH,
+        vocab_size=Config.VOCAB_SIZE,
+        embed_dim=Config.EMBED_DIM
+    )(inputs)
+    
+    # UNA SOLA capa de atención
+    attention = layers.MultiHeadAttention(
+        num_heads=Config.NUM_HEADS, 
+        key_dim=Config.EMBED_DIM
+    )(x, x)
+    x = layers.LayerNormalization()(x + attention)
+    
+    # Red neuronal feed-forward
+    ffn = keras.Sequential([
+        layers.Dense(Config.LATENT_DIM, activation="relu"),
+        layers.Dense(Config.EMBED_DIM)
+    ])(x)
+    x = layers.LayerNormalization()(x + ffn)
+    
+    # Capa de salida
+    outputs = layers.Dense(Config.VOCAB_SIZE, activation="softmax")(x)
+    
+    model = keras.Model(inputs, outputs)
+    model.compile(
+        optimizer=keras.optimizers.Adam(Config.MODEL1_LR),
+        loss="sparse_categorical_crossentropy",
+        metrics=["accuracy"]
     )
     
+    print(f"✅ Modelo 1 creado: {model.count_params():,} parámetros")
+    return model
+
+# ============================================================================
+# MODELO 2: TRANSFORMER DOBLE (MÁS COMPLEJO)
+# ============================================================================
+
+def create_model_2():
+    """
+    Modelo 2: Dos capas Transformer
+    - Más expresivo pero puede hacer overfitting
+    - Más parámetros, más capacidad
+    - Requiere entrenamiento cuidadoso
+    """
+    print("🏗️ Creando Modelo 2 (Doble)...")
+    
+    inputs = keras.Input(shape=(None,), dtype="int32")
+    
+    # Embeddings usando la capa personalizada
+    x = PositionalEmbedding(
+        sequence_length=Config.SEQUENCE_LENGTH,
+        vocab_size=Config.VOCAB_SIZE,
+        embed_dim=Config.EMBED_DIM
+    )(inputs)
+    
+    # PRIMERA capa de atención
+    attention1 = layers.MultiHeadAttention(
+        num_heads=Config.NUM_HEADS, 
+        key_dim=Config.EMBED_DIM
+    )(x, x)
+    x = layers.LayerNormalization()(x + attention1)
+    
+    ffn1 = keras.Sequential([
+        layers.Dense(Config.LATENT_DIM, activation="relu"),
+        layers.Dense(Config.EMBED_DIM)
+    ])(x)
+    x = layers.LayerNormalization()(x + ffn1)
+    
+    # SEGUNDA capa de atención (lo que lo hace más poderoso)
+    attention2 = layers.MultiHeadAttention(
+        num_heads=Config.NUM_HEADS, 
+        key_dim=Config.EMBED_DIM
+    )(x, x)
+    x = layers.LayerNormalization()(x + attention2)
+    
+    ffn2 = keras.Sequential([
+        layers.Dense(Config.LATENT_DIM, activation="relu"),
+        layers.Dense(Config.EMBED_DIM)
+    ])(x)
+    x = layers.LayerNormalization()(x + ffn2)
+    
+    # Capa de salida
+    outputs = layers.Dense(Config.VOCAB_SIZE, activation="softmax")(x)
+    
+    model = keras.Model(inputs, outputs)
+    model.compile(
+        optimizer=keras.optimizers.Adam(Config.MODEL2_LR),  # LR más bajo
+        loss="sparse_categorical_crossentropy",
+        metrics=["accuracy"]
+    )
+    
+    print(f"✅ Modelo 2 creado: {model.count_params():,} parámetros")
+    return model
+
+# ============================================================================
+# PREPARACIÓN DE DATOS (COMPARTIDA)
+# ============================================================================
+
+def prepare_data():
+    """
+    Prepara los datos de IMDb para entrenamiento.
+    Se usa para ambos modelos.
+    """
+    print("📊 Preparando datos de IMDb...")
+    
+    # Cargar dataset
+    (x_train, _), _ = keras.datasets.imdb.load_data()
+    word_index = keras.datasets.imdb.get_word_index()
+    reverse_word_index = dict([(value, key) for (key, value) in word_index.items()])
+    
+    # Convertir a texto
+    def decode_review(text):
+        return ' '.join([reverse_word_index.get(i - 3, '?') for i in text])
+    
+    text_data = []
+    for i in range(min(Config.SAMPLE_SIZE, len(x_train))):
+        review_text = decode_review(x_train[i])
+        text_data.append(review_text)
+    
+    # Crear vectorizador
+    dataset = tf.data.Dataset.from_tensor_slices(text_data).batch(Config.BATCH_SIZE)
+    
+    text_vectorization = layers.TextVectorization(
+        max_tokens=Config.VOCAB_SIZE,
+        output_mode="int",
+        output_sequence_length=Config.SEQUENCE_LENGTH,
+    )
     text_vectorization.adapt(dataset)
     
-    # Guardar vectorizador
-    os.makedirs(config.MODEL_SAVE_PATH, exist_ok=True)
-    vectorizer_config = text_vectorization.get_config()
-    vectorizer_weights = text_vectorization.get_weights()
-    
-    np.save(vectorizer_path, vectorizer_config)
-    np.save(weights_path, vectorizer_weights, allow_pickle=True)
-    
-    vocabulary = text_vectorization.get_vocabulary()
-    print(f"✅ Vectorizador nuevo creado: {len(vocabulary)} tokens")
-    
-    # Mostrar palabras de cine
-    movie_words = [w for w in vocabulary if w in [
-        'movie', 'film', 'good', 'bad', 'great', 'excellent', 'terrible', 
-        'amazing', 'awful', 'brilliant', 'worst', 'best', 'story', 'plot',
-        'acting', 'actor', 'actress', 'director', 'scene', 'character'
-    ]]
-    print(f"🎬 Palabras de cine encontradas ({len(movie_words)}): {movie_words}")
-    
-    return text_vectorization
-
-def preparar_datos_entrenamiento(dataset, text_vectorization):
-    """
-    Preparar datos para entrenamiento
-    """
-    def prepare_lm_inputs(text_batch):
-        vectorized_sequences = text_vectorization(text_batch)
-        x = vectorized_sequences[:, :-1]
-        y = vectorized_sequences[:, 1:]
+    # Preparar secuencias de entrenamiento
+    def prepare_sequences(text_batch):
+        vectorized = text_vectorization(text_batch)
+        x = vectorized[:, :-1]
+        y = vectorized[:, 1:]
         return x, y
-
-    lm_dataset = dataset.map(prepare_lm_inputs, num_parallel_calls=tf.data.AUTOTUNE)
-    lm_dataset = lm_dataset.prefetch(tf.data.AUTOTUNE)
     
-    return lm_dataset
+    train_dataset = dataset.map(prepare_sequences)
+    
+    print("✅ Datos preparados")
+    return train_dataset, text_vectorization
 
-def entrenar_modelo_1(lm_dataset, epochs=40):
-    """
-    Entrenar específicamente el Modelo 1
-    """
-    print(f"\n🏋️ ENTRENANDO MODELO 1 POR {epochs} ÉPOCAS")
-    print("=" * 60)
+def save_vectorizer(text_vectorization):
+    """Guardar el vectorizador para usar en la app"""
+    # Crear carpeta si no existe
+    os.makedirs("saved_models", exist_ok=True)
+    
+    vectorizer_data = {
+        'config': text_vectorization.get_config(),
+        'weights': text_vectorization.get_weights(),
+        'vocabulary': text_vectorization.get_vocabulary()
+    }
+    
+    with open("saved_models/text_vectorizer.pkl", "wb") as f:
+        pickle.dump(vectorizer_data, f)
+    
+    print("✅ Vectorizador guardado en saved_models/")
+
+# ============================================================================
+# FUNCIONES DE ENTRENAMIENTO
+# ============================================================================
+
+def train_model_1(train_dataset, text_vectorization):
+    """Entrenar específicamente el Modelo 1"""
+    print(f"\n🏋️ ENTRENANDO MODELO 1 ({Config.MODEL1_EPOCHS} épocas)")
+    print("=" * 50)
+    
+    # Crear carpeta si no existe
+    os.makedirs("saved_models", exist_ok=True)
     
     # Crear modelo
-    model1 = create_transformer_model_1()
-    print(f"📊 Modelo 1: {model1.count_params():,} parámetros")
+    model = create_model_1()
     
-    # Callbacks optimizados para Modelo 1
+    # Callbacks para entrenamiento inteligente
     callbacks = [
         keras.callbacks.EarlyStopping(
             monitor='loss', 
-            patience=15,  # Más paciencia para Modelo 1
-            restore_best_weights=True,
-            verbose=1
+            patience=5,  # Parar si no mejora en 5 épocas
+            restore_best_weights=True
         ),
         keras.callbacks.ReduceLROnPlateau(
             monitor='loss',
             factor=0.5,
-            patience=7,
-            min_lr=0.0001,
-            verbose=1
+            patience=3
         )
     ]
     
     # Entrenar
-    history = model1.fit(
-        lm_dataset, 
-        epochs=epochs, 
-        verbose=1,
-        callbacks=callbacks
+    history = model.fit(
+        train_dataset,
+        epochs=Config.MODEL1_EPOCHS,
+        callbacks=callbacks,
+        verbose=1
     )
     
-    # Guardar
-    model1.save(f"{config.MODEL_SAVE_PATH}/transformer_model_1.keras")
+    # Guardar en la carpeta saved_models
+    model.save("saved_models/movie_model_1.keras")
+    save_vectorizer(text_vectorization)  # Guardar vectorizador también
     
-    # Estadísticas
-    best_loss = min(history.history['loss'])
-    print(f"\n✅ Modelo 1 completado - Mejor loss: {best_loss:.4f}")
-    
-    return model1, history
+    final_loss = min(history.history['loss'])
+    print(f"✅ Modelo 1 entrenado - Mejor loss: {final_loss:.4f}")
+    print("💾 Guardado como: saved_models/movie_model_1.keras")
 
-def entrenar_modelo_2(lm_dataset, epochs=25):
-    """
-    Entrenar específicamente el Modelo 2 (con menos épocas para evitar overfitting)
-    """
-    print(f"\n🏋️ ENTRENANDO MODELO 2 POR {epochs} ÉPOCAS")
-    print("=" * 60)
+def train_model_2(train_dataset, text_vectorization):
+    """Entrenar específicamente el Modelo 2"""
+    print(f"\n🏋️ ENTRENANDO MODELO 2 ({Config.MODEL2_EPOCHS} épocas)")
+    print("=" * 50)
+    
+    # Crear carpeta si no existe
+    os.makedirs("saved_models", exist_ok=True)
     
     # Crear modelo
-    model2 = create_transformer_model_2()
-    print(f"📊 Modelo 2: {model2.count_params():,} parámetros")
+    model = create_model_2()
     
-    # Callbacks MÁS RESTRICTIVOS para Modelo 2 (evitar overfitting)
+    # Callbacks MÁS RESTRICTIVOS para evitar overfitting
     callbacks = [
         keras.callbacks.EarlyStopping(
             monitor='loss', 
-            patience=8,   # MENOS paciencia para Modelo 2
-            restore_best_weights=True,
-            verbose=1
+            patience=3,  # MENOS paciencia
+            restore_best_weights=True
         ),
         keras.callbacks.ReduceLROnPlateau(
             monitor='loss',
-            factor=0.7,   # Reducción más suave
-            patience=4,   # Más rápido
-            min_lr=0.0002, # LR mínimo más alto
-            verbose=1
+            factor=0.7,  # Reducción más suave
+            patience=2
         )
     ]
     
-    # Entrenar con learning rate más bajo para Modelo 2
-    model2.compile(
-        loss="sparse_categorical_crossentropy", 
-        optimizer=keras.optimizers.RMSprop(learning_rate=0.0003)  # MÁS BAJO
-    )
-    
     # Entrenar
-    history = model2.fit(
-        lm_dataset, 
-        epochs=epochs, 
-        verbose=1,
-        callbacks=callbacks
+    history = model.fit(
+        train_dataset,
+        epochs=Config.MODEL2_EPOCHS,  # MENOS épocas
+        callbacks=callbacks,
+        verbose=1
     )
     
-    # Guardar
-    model2.save(f"{config.MODEL_SAVE_PATH}/transformer_model_2.keras")
+    # Guardar en la carpeta saved_models
+    model.save("saved_models/movie_model_2.keras")
+    save_vectorizer(text_vectorization)
     
-    # Estadísticas
-    best_loss = min(history.history['loss'])
-    print(f"\n✅ Modelo 2 completado - Mejor loss: {best_loss:.4f}")
-    
-    return model2, history
+    final_loss = min(history.history['loss'])
+    print(f"✅ Modelo 2 entrenado - Mejor loss: {final_loss:.4f}")
+    print("💾 Guardado como: saved_models/movie_model_2.keras")
+
+# ============================================================================
+# FUNCIÓN PRINCIPAL
+# ============================================================================
 
 def main():
-    """
-    Función principal con argumentos de línea de comandos
-    """
-    parser = argparse.ArgumentParser(description='Entrenamiento separado de modelos Transformer')
-    
-    parser.add_argument('--modelo', choices=['1', '2', 'ambos'], required=True,
-                       help='Qué modelo entrenar: 1, 2, o ambos')
-    parser.add_argument('--epocas1', type=int, default=40,
-                       help='Épocas para Modelo 1 (default: 40)')
-    parser.add_argument('--epocas2', type=int, default=25,
-                       help='Épocas para Modelo 2 (default: 25)')
-    parser.add_argument('--limpiar', action='store_true',
-                       help='Limpiar modelos anteriores antes de entrenar')
-    parser.add_argument('--nuevo-vectorizador', action='store_true',
-                       help='Crear nuevo vectorizador (ignorar existente)')
+    """Función principal con argumentos de línea de comandos"""
+    parser = argparse.ArgumentParser(description='Entrenar modelos Transformer')
+    parser.add_argument('--modelo', choices=['1', '2', 'all'], required=True,
+                       help='Qué modelo entrenar: 1, 2, o all (ambos)')
     
     args = parser.parse_args()
     
-    print("🚀 ENTRENAMIENTO SEPARADO DE MODELOS TRANSFORMER")
-    print("=" * 60)
-    print(f"📋 Configuración:")
-    print(f"   - Modelo(s) a entrenar: {args.modelo}")
-    print(f"   - Épocas Modelo 1: {args.epocas1}")
-    print(f"   - Épocas Modelo 2: {args.epocas2}")
-    print(f"   - Limpiar modelos: {args.limpiar}")
-    print(f"   - Nuevo vectorizador: {args.nuevo_vectorizador}")
-    print("=" * 60)
+    print("🚀 ENTRENAMIENTO DE MODELOS TRANSFORMER")
+    print("=" * 50)
+    print(f"🎯 Entrenando: Modelo {args.modelo}")
+    print(f"📊 Configuración:")
+    print(f"   - Vocabulario: {Config.VOCAB_SIZE} tokens")
+    print(f"   - Secuencia: {Config.SEQUENCE_LENGTH} tokens")
+    print(f"   - Muestras: {Config.SAMPLE_SIZE}")
     
-    try:
-        # Limpiar si se solicita
-        if args.limpiar:
-            limpiar_modelos()
+    # Preparar datos (común para ambos)
+    train_dataset, text_vectorization = prepare_data()
+    
+    # Entrenar según selección
+    if args.modelo == '1':
+        train_model_1(train_dataset, text_vectorization)
+    elif args.modelo == '2':
+        train_model_2(train_dataset, text_vectorization)
+    elif args.modelo == 'all':
+        train_model_1(train_dataset, text_vectorization)
+        print("\n" + "="*30 + " MODELO 2 " + "="*30)
+        train_model_2(train_dataset, text_vectorization)
+    
+    print("\n🎉 ¡ENTRENAMIENTO COMPLETADO!")
+    print("🚀 Ahora puedes usar: streamlit run app.py")
+
+# ============================================================================
+# MODO INTERACTIVO (si no se usan argumentos)
+# ============================================================================
+
+def interactive_mode():
+    """Modo interactivo si se ejecuta sin argumentos"""
+    print("🎬 ENTRENADOR DE MODELOS DE RESEÑAS")
+    print("=" * 40)
+    print("¿Qué modelo quieres entrenar?")
+    print("1. Modelo 1 (Simple, estable)")
+    print("2. Modelo 2 (Doble, más complejo)")
+    print("3. Ambos modelos")
+    print("4. Salir")
+    
+    while True:
+        choice = input("\nElige una opción (1-4): ").strip()
+        
+        if choice in ['1', '2', '3']:
+            # Preparar datos
+            train_dataset, text_vectorization = prepare_data()
+            
+            if choice == '1':
+                train_model_1(train_dataset, text_vectorization)
+            elif choice == '2':
+                train_model_2(train_dataset, text_vectorization)
+            elif choice == '3':
+                train_model_1(train_dataset, text_vectorization)
+                train_model_2(train_dataset, text_vectorization)
+            
+            print("\n✅ ¡Entrenamiento completado!")
+            break
+            
+        elif choice == '4':
+            print("👋 ¡Hasta luego!")
+            break
         else:
-            os.makedirs(config.MODEL_SAVE_PATH, exist_ok=True)
-        
-        # Crear dataset
-        dataset = crear_dataset_optimizado()
-        
-        # Crear o cargar vectorizador
-        text_vectorization = crear_o_cargar_vectorizador(dataset, args.nuevo_vectorizador)
-        
-        # Preparar datos
-        lm_dataset = preparar_datos_entrenamiento(dataset, text_vectorization)
-        
-        # Entrenar según la selección
-        if args.modelo == '1':
-            entrenar_modelo_1(lm_dataset, args.epocas1)
-        elif args.modelo == '2':
-            entrenar_modelo_2(lm_dataset, args.epocas2)
-        elif args.modelo == 'ambos':
-            entrenar_modelo_1(lm_dataset, args.epocas1)
-            entrenar_modelo_2(lm_dataset, args.epocas2)
-        
-        print("\n🎉 ¡ENTRENAMIENTO COMPLETADO!")
-        print("🚀 Ejecuta: uv run streamlit run app.py")
-        
-    except Exception as e:
-        print(f"\n❌ ERROR: {e}")
-        import traceback
-        traceback.print_exc()
+            print("❌ Opción no válida.")
 
 if __name__ == "__main__":
-    main()
+    import sys
+    
+    # Si no hay argumentos, usar modo interactivo
+    if len(sys.argv) == 1:
+        interactive_mode()
+    else:
+        main()
