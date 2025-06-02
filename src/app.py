@@ -1,8 +1,10 @@
 """
-🎬 INTERFAZ WEB SIMPLE - UNA COLUMNA
-===================================
+🎬 INTERFAZ WEB SIMPLE - GENERADOR DE RESEÑAS
+============================================
 
-Interfaz web súper simple para generar reseñas.
+Interfaz web simplificada para generar reseñas.
+Solo carga modelos, muestra summary y genera texto.
+
 Ejecutar: streamlit run app.py
 """
 
@@ -12,6 +14,8 @@ from tensorflow import keras
 from keras import layers
 import pickle
 import os
+import io
+import sys
 
 # ============================================================================
 # CONFIGURACIÓN DE LA PÁGINA
@@ -20,7 +24,7 @@ import os
 st.set_page_config(
     page_title="🎬 Generador de Reseñas",
     page_icon="🎬",
-    layout="centered"  # UNA COLUMNA centrada
+    layout="centered"
 )
 
 # ============================================================================
@@ -61,252 +65,8 @@ class PositionalEmbedding(layers.Layer):
     def from_config(cls, config):
         return cls(**config)
 
-# Registrar la capa personalizada para que pueda ser cargada
+# Registrar la capa personalizada
 keras.utils.get_custom_objects()['PositionalEmbedding'] = PositionalEmbedding
-
-# ============================================================================
-# FUNCIONES PARA MÉTRICAS
-# ============================================================================
-
-def get_model_info(model_name):
-    """
-    Obtiene información técnica de un modelo específico.
-    
-    Args:
-        model_name: "1" o "2"
-    """
-    model_file = f"saved_models/movie_model_{model_name}.keras"
-    
-    if not os.path.exists(model_file):
-        return None
-    
-    try:
-        model = keras.models.load_model(model_file)
-        
-        # Información básica
-        total_params = model.count_params()
-        trainable_params = sum([tf.keras.backend.count_params(w) for w in model.trainable_weights])
-        
-        # Arquitectura
-        layers_info = []
-        for i, layer in enumerate(model.layers):
-            layer_info = {
-                'name': layer.name,
-                'type': layer.__class__.__name__,
-                'output_shape': str(layer.output_shape) if hasattr(layer, 'output_shape') else 'N/A',
-                'params': layer.count_params()
-            }
-            layers_info.append(layer_info)
-        
-        return {
-            'total_params': total_params,
-            'trainable_params': trainable_params,
-            'layers': layers_info,
-            'model': model
-        }
-        
-    except Exception as e:
-        st.error(f"Error cargando modelo {model_name}: {str(e)}")
-        return None
-
-def show_model_metrics(model_name):
-    """Mostrar métricas detalladas de un modelo específico"""
-    model_info = get_model_info(model_name)
-    
-    if not model_info:
-        st.error(f"❌ Modelo {model_name} no encontrado o no se pudo cargar")
-        return
-    
-    # Configuración según el modelo
-    config_info = {
-        "1": {
-            "nombre": "Transformer Simple",
-            "capas_atencion": 1,
-            "epocas_entrenamiento": 15,
-            "learning_rate": 0.001,
-            "fortalezas": ["Más estable", "Menos overfitting", "Entrenamiento rápido"],
-            "uso_recomendado": "Texto coherente y predecible"
-        },
-        "2": {
-            "nombre": "Transformer Doble",
-            "capas_atencion": 2,
-            "epocas_entrenamiento": 10,
-            "learning_rate": 0.0005,
-            "fortalezas": ["Más expresivo", "Mayor capacidad", "Texto más creativo"],
-            "uso_recomendado": "Contenido original y variado"
-        }
-    }
-    
-    config = config_info[model_name]
-    
-    st.success(f"📊 **Métricas del Modelo {model_name}** - {config['nombre']}")
-    
-    # Métricas principales en una columna
-    st.metric(
-        label="🔢 Parámetros Totales",
-        value=f"{model_info['total_params']:,}",
-        help="Número total de parámetros entrenables del modelo"
-    )
-    
-    st.metric(
-        label="🎯 Capas de Atención",
-        value=config['capas_atencion'],
-        help="Número de capas Transformer de atención múltiple"
-    )
-    
-    st.metric(
-        label="📚 Épocas Entrenamiento",
-        value=config['epocas_entrenamiento'],
-        help="Número de épocas usadas durante el entrenamiento"
-    )
-    
-    # Información técnica
-    st.markdown("### 🔧 Configuración Técnica")
-    
-    st.markdown(f"""
-    **⚙️ Hiperparámetros:**
-    - Learning Rate: `{config['learning_rate']}`
-    - Vocabulario: `5,000 tokens`
-    - Secuencia máxima: `60 tokens`
-    - Embedding dimension: `128`
-    - Attention heads: `4`
-    
-    **🎯 Características:**
-    - Parámetros entrenables: `{model_info['trainable_params']:,}`
-    - Arquitectura: `{config['nombre']}`
-    - Dataset: `IMDb reviews`
-    - Tamaño muestra: `2,000 reseñas`
-    """)
-    
-    # Fortalezas del modelo
-    st.markdown("### ✨ Fortalezas del Modelo")
-    strengths_text = " • ".join(config['fortalezas'])
-    st.info(f"**{config['uso_recomendado']}**\n\n• {strengths_text}")
-    
-    # Arquitectura detallada
-    with st.expander("🏗️ Ver Arquitectura Detallada"):
-        st.markdown("#### Capas del Modelo:")
-        
-        for i, layer in enumerate(model_info['layers']):
-            if layer['params'] > 0:  # Solo mostrar capas con parámetros
-                st.markdown(f"""
-                **Capa {i+1}: {layer['name']}**
-                - Tipo: `{layer['type']}`
-                - Forma salida: `{layer['output_shape']}`
-                - Parámetros: `{layer['params']:,}`
-                """)
-    
-    # Consejos de uso
-    st.markdown("### 💡 Consejos de Uso")
-    
-    if model_name == "1":
-        st.markdown("""
-        **🎯 Mejor para:**
-        - Usuarios principiantes
-        - Reseñas coherentes y estables
-        - Cuando necesitas resultados predecibles
-        
-        **🌡️ Temperatura recomendada:** 0.5 - 0.8
-        **📏 Longitud ideal:** 30-50 palabras
-        """)
-    else:
-        st.markdown("""
-        **🎯 Mejor para:**
-        - Usuarios avanzados
-        - Contenido más creativo y original
-        - Cuando quieres variedad en el texto
-        
-        **🌡️ Temperatura recomendada:** 0.7 - 1.2
-        **📏 Longitud ideal:** 40-80 palabras
-        """)
-
-def compare_models():
-    """Comparar ambos modelos lado a lado"""
-    model1_info = get_model_info("1")
-    model2_info = get_model_info("2")
-    
-    if not model1_info and not model2_info:
-        st.error("❌ No se encontraron modelos entrenados")
-        return
-    elif not model1_info:
-        st.warning("⚠️ Solo el Modelo 2 está disponible")
-        show_model_metrics("2")
-        return
-    elif not model2_info:
-        st.warning("⚠️ Solo el Modelo 1 está disponible")
-        show_model_metrics("1")
-        return
-    
-    st.success("⚖️ **Comparación de Modelos**")
-    
-    # Comparación en una columna
-    st.markdown("### 🤖 Modelo 1 - Simple")
-    st.markdown(f"""
-    **📊 Métricas:**
-    - Parámetros: `{model1_info['total_params']:,}`
-    - Capas atención: `1`
-    - Épocas: `15`
-    - Learning Rate: `0.001`
-    
-    **✨ Fortalezas:**
-    - ✅ Más estable
-    - ✅ Menos overfitting  
-    - ✅ Entrenamiento rápido
-    - ✅ Resultados predecibles
-    
-    **🎯 Mejor para:**
-    - Principiantes
-    - Texto coherente
-    - Uso general
-    """)
-    
-    st.divider()
-    
-    st.markdown("### 🤖 Modelo 2 - Doble")
-    st.markdown(f"""
-    **📊 Métricas:**
-    - Parámetros: `{model2_info['total_params']:,}`
-    - Capas atención: `2`
-    - Épocas: `10`
-    - Learning Rate: `0.0005`
-    
-    **✨ Fortalezas:**
-    - ✅ Más expresivo
-    - ✅ Mayor capacidad
-    - ✅ Texto más creativo
-    - ✅ Mejor para contenido original
-    
-    **🎯 Mejor para:**
-    - Usuarios avanzados
-    - Contenido creativo
-    - Variedad en el texto
-    """)
-    
-    # Recomendaciones
-    st.markdown("### 🎯 Recomendaciones de Uso")
-    
-    param_diff = model2_info['total_params'] - model1_info['total_params']
-    param_percent = (param_diff / model1_info['total_params']) * 100
-    
-    st.info(f"""
-    **📈 Diferencias clave:**
-    - El Modelo 2 tiene **{param_diff:,} parámetros más** ({param_percent:.1f}% más complejo)
-    - El Modelo 1 es **más estable** para principiantes
-    - El Modelo 2 es **más creativo** pero requiere ajuste fino
-    
-    **💡 Consejo:** Empieza con el Modelo 1, luego experimenta con el Modelo 2
-    """)
-    
-    # Tabla de configuraciones recomendadas
-    st.markdown("### ⚙️ Configuraciones Recomendadas")
-    
-    st.markdown("""
-    | Parámetro | Modelo 1 | Modelo 2 |
-    |-----------|----------|----------|
-    | **Temperatura** | 0.5 - 0.8 | 0.7 - 1.2 |
-    | **Longitud** | 30-50 palabras | 40-80 palabras |
-    | **Uso ideal** | Texto coherente | Texto creativo |
-    """)
 
 # ============================================================================
 # FUNCIONES PARA CARGAR MODELOS
@@ -333,7 +93,7 @@ def load_model(model_name):
 
 @st.cache_resource
 def load_vectorizer():
-    """Carga el traductor de palabras"""
+    """Carga el vectorizador de texto"""
     vectorizer_file = "saved_models/text_vectorizer.pkl"
     
     if not os.path.exists(vectorizer_file):
@@ -343,14 +103,14 @@ def load_vectorizer():
         with open(vectorizer_file, "rb") as f:
             vectorizer_data = pickle.load(f)
         
-        # Recrear vectorizador de forma más simple
+        # Recrear vectorizador
         vectorizer = keras.layers.TextVectorization(
             max_tokens=vectorizer_data['config']['max_tokens'],
             output_mode=vectorizer_data['config']['output_mode'],
             output_sequence_length=vectorizer_data['config']['output_sequence_length']
         )
         
-        # Inicializar con datos dummy de forma más compatible
+        # Inicializar con datos dummy
         dummy_texts = ["dummy text", "another text", "more text"]
         dummy_dataset = tf.data.Dataset.from_tensor_slices(dummy_texts).batch(1)
         vectorizer.adapt(dummy_dataset)
@@ -366,6 +126,28 @@ def load_vectorizer():
         
     except Exception as e:
         return None, None, f"Error cargando vectorizer: {str(e)}"
+
+# ============================================================================
+# FUNCIÓN PARA OBTENER SUMMARY DEL MODELO
+# ============================================================================
+
+def get_model_summary(model):
+    """
+    Obtiene el summary del modelo como string.
+    
+    Args:
+        model: Modelo de TensorFlow/Keras cargado
+        
+    Returns:
+        str: Summary del modelo
+    """
+    # Capturar el summary en un string
+    stringio = io.StringIO()
+    model.summary(print_fn=lambda x: stringio.write(x + '\n'))
+    summary_string = stringio.getvalue()
+    stringio.close()
+    
+    return summary_string
 
 # ============================================================================
 # FUNCIÓN DE GENERACIÓN
@@ -427,7 +209,7 @@ def generate_review(model, vectorizer, id_to_word, prompt, temperature, max_word
 # ============================================================================
 
 def main():
-    """Interfaz principal de una columna"""
+    """Interfaz principal simplificada"""
     
     # TÍTULO
     st.title("🎬 Generador de Reseñas de Películas")
@@ -439,16 +221,9 @@ def main():
     model_choice = st.radio(
         "¿Qué modelo usar?",
         ["1", "2"],
-        format_func=lambda x: f"Modelo {x} ({'Simple' if x == '1' else 'Doble'})",
+        format_func=lambda x: f"Modelo {x}",
         horizontal=True
     )
-    
-    st.info(f"""
-    **Modelo {model_choice}:**
-    {"• Una capa Transformer" if model_choice == "1" else "• Dos capas Transformer"}
-    {"• Más estable y rápido" if model_choice == "1" else "• Más creativo y complejo"}
-    {"• Recomendado para empezar" if model_choice == "1" else "• Para usuarios avanzados"}
-    """)
     
     # CARGAR MODELO Y VECTORIZADOR
     model, model_error = load_model(model_choice)
@@ -458,16 +233,40 @@ def main():
     if model_error or vec_error:
         st.error(f"❌ {model_error or vec_error}")
         st.warning("💡 **Solución:** Ejecuta primero el entrenamiento:")
-        st.code(f"python train.py --modelo {model_choice}")
+        st.code(f"python train.py --model {model_choice}")
         st.stop()
     
     st.success(f"✅ Modelo {model_choice} cargado correctamente")
+    
+    # MOSTRAR SUMMARY DEL MODELO
+    st.subheader(f"📊 Summary del Modelo {model_choice}")
+    
+    if st.button(f"📋 Mostrar Detalles del Modelo {model_choice}", use_container_width=True):
+        try:
+            # Obtener información básica del modelo
+            total_params = model.count_params()
+            trainable_params = sum([tf.keras.backend.count_params(w) for w in model.trainable_weights])
+            
+            # Mostrar información básica
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("📊 Parámetros Totales", f"{total_params:,}")
+            with col2:
+                st.metric("🎯 Parámetros Entrenables", f"{trainable_params:,}")
+            
+            # Mostrar summary completo
+            st.markdown("### 🏗️ Arquitectura del Modelo")
+            summary_text = get_model_summary(model)
+            st.code(summary_text, language="text")
+            
+        except Exception as e:
+            st.error(f"Error obteniendo summary: {str(e)}")
     
     # SEPARADOR
     st.divider()
     
     # CONFIGURACIÓN DE GENERACIÓN
-    st.subheader("✍️ Escribe tu Reseña")
+    st.subheader("✍️ Genera tu Reseña")
     
     # Prompt del usuario
     prompt = st.text_area(
@@ -479,23 +278,27 @@ def main():
     )
     
     # Controles
-    temperature = st.slider(
-        "🌡️ Creatividad",
-        min_value=0.1,
-        max_value=2.0,
-        value=0.7,
-        step=0.1,
-        help="0.1 = muy conservador y predecible\n2.0 = muy creativo y arriesgado"
-    )
+    col1, col2 = st.columns(2)
     
-    max_words = st.slider(
-        "📏 Longitud",
-        min_value=10,
-        max_value=100,
-        value=50,
-        step=5,
-        help="Número máximo de palabras a generar"
-    )
+    with col1:
+        temperature = st.slider(
+            "🌡️ Creatividad",
+            min_value=0.1,
+            max_value=2.0,
+            value=0.7,
+            step=0.1,
+            help="0.1 = conservador, 2.0 = muy creativo"
+        )
+    
+    with col2:
+        max_words = st.slider(
+            "📏 Longitud",
+            min_value=10,
+            max_value=100,
+            value=50,
+            step=5,
+            help="Número máximo de palabras a generar"
+        )
     
     # BOTÓN DE GENERACIÓN
     if st.button("🚀 Generar Reseña", type="primary", use_container_width=True):
@@ -513,7 +316,7 @@ def main():
             if words_added > 0:
                 st.success("🎉 ¡Reseña generada exitosamente!")
                 
-                # Mostrar la reseña con estilo
+                # Mostrar la reseña
                 st.markdown("### 📝 Tu Reseña:")
                 st.markdown(f"""
                 <div style="
@@ -531,65 +334,18 @@ def main():
                 </div>
                 """, unsafe_allow_html=True)
                 
-                # Estadísticas
+                # Estadísticas simples
                 total_words = len(generated_text.split())
                 st.markdown(f"""
                 **📊 Estadísticas:**
                 - 🔤 Palabras añadidas: {words_added}
                 - 📏 Total de palabras: {total_words}
                 - 🌡️ Creatividad usada: {temperature}
-                - 🤖 Modelo: {model_choice} ({'Simple' if model_choice == '1' else 'Doble'})
+                - 🤖 Modelo usado: {model_choice}
                 """)
                 
-                # Botón para generar otra
-                if st.button("🔄 Generar otra versión", use_container_width=True):
-                    st.rerun()
             else:
                 st.error("❌ No se pudo generar la reseña. Intenta ajustar los parámetros.")
-    
-    # SEPARADOR
-    st.divider()
-    
-    # MÉTRICAS DE LOS MODELOS
-    st.subheader("📊 Métricas de los Modelos")
-    
-    if st.button("📈 Ver Métricas Modelo 1", use_container_width=True):
-        show_model_metrics("1")
-    
-    if st.button("📈 Ver Métricas Modelo 2", use_container_width=True):
-        show_model_metrics("2")
-    
-    # Botón para comparar ambos modelos
-    if st.button("⚖️ Comparar Ambos Modelos", type="secondary", use_container_width=True):
-        compare_models()
-    
-    # INFORMACIÓN DEL PROYECTO
-    with st.expander("ℹ️ ¿Cómo funciona este proyecto?"):
-        st.markdown(f"""
-        ### 🧠 Tecnología
-        
-        **Modelo Transformer {model_choice}:**
-        - {"🔹 Una capa de atención (más simple)" if model_choice == "1" else "🔹 Dos capas de atención (más complejo)"}
-        - 🔹 Entrenado con reseñas reales de IMDb
-        - 🔹 Vocabulario de 5,000 palabras cinematográficas
-        
-        ### 🎯 ¿Cómo genera texto?
-        1. **Lee** el inicio que escribes
-        2. **Analiza** patrones de las reseñas que conoce
-        3. **Predice** qué palabra podría venir después
-        4. **Repite** el proceso hasta formar una reseña completa
-        
-        ### 🛠️ Tecnologías usadas
-        - **TensorFlow**: Framework de IA
-        - **Transformers**: Arquitectura del modelo
-        - **Dataset IMDb**: Reseñas reales para entrenamiento
-        - **Streamlit**: Esta interfaz web
-        
-        ### 🎛️ Controles
-        - **Creatividad baja (0.1-0.5)**: Texto más predecible y coherente
-        - **Creatividad media (0.6-1.0)**: Balance entre coherencia y originalidad
-        - **Creatividad alta (1.1-2.0)**: Texto más arriesgado y creativo
-        """)
 
 if __name__ == "__main__":
     main()

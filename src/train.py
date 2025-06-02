@@ -1,230 +1,72 @@
 """
-🏋️ ENTRENAMIENTO DE MODELOS TRANSFORMER
-=======================================
+🏋️ ENTRENADOR CENTRAL DE MODELOS
+===============================
 
-Script para entrenar los modelos por separado.
+Script principal para entrenar los modelos Transformer por separado.
+Estructura simplificada y clara.
 
 Uso:
-    python train.py --modelo 1    # Solo Modelo 1
-    python train.py --modelo 2    # Solo Modelo 2
-    python train.py --modelo all  # Ambos modelos
+    python train.py --model 1      # Solo Modelo 1
+    python train.py --model 2      # Solo Modelo 2  
+    python train.py --model both   # Ambos modelos
+    python train.py --info 1       # Información Modelo 1
+    python train.py --info 2       # Información Modelo 2
+    python train.py --status       # Estado de modelos guardados
 """
 
+import argparse
+import sys
+import os
 import tensorflow as tf
 from tensorflow import keras
 from keras import layers
-import numpy as np
-import argparse
 import pickle
-import os
+
+# Importar modelos
+from model_1 import train_model_1, get_model_1_info, Model1Config
+from model_2 import train_model_2, get_model_2_info, Model2Config
 
 # ============================================================================
-# CONFIGURACIÓN
+# FUNCIONES DE DATOS COMPARTIDAS
 # ============================================================================
 
-class Config:
-    """Configuración para el entrenamiento"""
-    # Parámetros del modelo
-    VOCAB_SIZE = 5000           # Vocabulario de palabras
-    SEQUENCE_LENGTH = 60        # Longitud máxima de secuencia
-    EMBED_DIM = 128            # Dimensión de embeddings
-    NUM_HEADS = 4              # Cabezas de atención
-    LATENT_DIM = 256           # Dimensión de la capa densa
-    
-    # Entrenamiento
-    BATCH_SIZE = 32
-    SAMPLE_SIZE = 2000         # Muestras del dataset
-    
-    # Configuración específica por modelo
-    MODEL1_EPOCHS = 15         # Modelo 1: Menos épocas, más estable
-    MODEL1_LR = 0.001         # Learning rate normal
-    
-    MODEL2_EPOCHS = 10         # Modelo 2: Pocas épocas para evitar overfitting
-    MODEL2_LR = 0.0005        # Learning rate más bajo
-
-# ============================================================================
-# CAPA PERSONALIZADA PARA EMBEDDINGS POSICIONALES
-# ============================================================================
-
-class PositionalEmbedding(layers.Layer):
-    """Capa personalizada para embeddings posicionales"""
-    
-    def __init__(self, sequence_length, vocab_size, embed_dim, **kwargs):
-        super().__init__(**kwargs)
-        self.sequence_length = sequence_length
-        self.vocab_size = vocab_size
-        self.embed_dim = embed_dim
-        
-        self.token_embeddings = layers.Embedding(vocab_size, embed_dim)
-        self.position_embeddings = layers.Embedding(sequence_length, embed_dim)
-    
-    def call(self, inputs):
-        length = tf.shape(inputs)[-1]
-        positions = tf.range(start=0, limit=length, delta=1)
-        
-        token_emb = self.token_embeddings(inputs)
-        pos_emb = self.position_embeddings(positions)
-        
-        return token_emb + pos_emb
-    
-    def get_config(self):
-        config = super().get_config()
-        config.update({
-            "sequence_length": self.sequence_length,
-            "vocab_size": self.vocab_size,
-            "embed_dim": self.embed_dim,
-        })
-        return config
-    
-    @classmethod
-    def from_config(cls, config):
-        return cls(**config)
-
-# Registrar la capa personalizada de forma manual
-keras.utils.get_custom_objects()['PositionalEmbedding'] = PositionalEmbedding
-
-# ============================================================================
-# MODELO 1: TRANSFORMER SIMPLE (MÁS ESTABLE)
-# ============================================================================
-
-def create_model_1():
-    """
-    Modelo 1: Una sola capa Transformer
-    - Más estable y fácil de entrenar
-    - Menos parámetros, menos overfitting
-    - Recomendado para empezar
-    """
-    print("🏗️ Creando Modelo 1 (Simple)...")
-    
-    inputs = keras.Input(shape=(None,), dtype="int32")
-    
-    # Embeddings de tokens y posiciones usando la capa personalizada
-    x = PositionalEmbedding(
-        sequence_length=Config.SEQUENCE_LENGTH,
-        vocab_size=Config.VOCAB_SIZE,
-        embed_dim=Config.EMBED_DIM
-    )(inputs)
-    
-    # UNA SOLA capa de atención
-    attention = layers.MultiHeadAttention(
-        num_heads=Config.NUM_HEADS, 
-        key_dim=Config.EMBED_DIM
-    )(x, x)
-    x = layers.LayerNormalization()(x + attention)
-    
-    # Red neuronal feed-forward
-    ffn = keras.Sequential([
-        layers.Dense(Config.LATENT_DIM, activation="relu"),
-        layers.Dense(Config.EMBED_DIM)
-    ])(x)
-    x = layers.LayerNormalization()(x + ffn)
-    
-    # Capa de salida
-    outputs = layers.Dense(Config.VOCAB_SIZE, activation="softmax")(x)
-    
-    model = keras.Model(inputs, outputs)
-    model.compile(
-        optimizer=keras.optimizers.Adam(Config.MODEL1_LR),
-        loss="sparse_categorical_crossentropy",
-        metrics=["accuracy"]
-    )
-    
-    print(f"✅ Modelo 1 creado: {model.count_params():,} parámetros")
-    return model
-
-# ============================================================================
-# MODELO 2: TRANSFORMER DOBLE (MÁS COMPLEJO)
-# ============================================================================
-
-def create_model_2():
-    """
-    Modelo 2: Dos capas Transformer
-    - Más expresivo pero puede hacer overfitting
-    - Más parámetros, más capacidad
-    - Requiere entrenamiento cuidadoso
-    """
-    print("🏗️ Creando Modelo 2 (Doble)...")
-    
-    inputs = keras.Input(shape=(None,), dtype="int32")
-    
-    # Embeddings usando la capa personalizada
-    x = PositionalEmbedding(
-        sequence_length=Config.SEQUENCE_LENGTH,
-        vocab_size=Config.VOCAB_SIZE,
-        embed_dim=Config.EMBED_DIM
-    )(inputs)
-    
-    # PRIMERA capa de atención
-    attention1 = layers.MultiHeadAttention(
-        num_heads=Config.NUM_HEADS, 
-        key_dim=Config.EMBED_DIM
-    )(x, x)
-    x = layers.LayerNormalization()(x + attention1)
-    
-    ffn1 = keras.Sequential([
-        layers.Dense(Config.LATENT_DIM, activation="relu"),
-        layers.Dense(Config.EMBED_DIM)
-    ])(x)
-    x = layers.LayerNormalization()(x + ffn1)
-    
-    # SEGUNDA capa de atención (lo que lo hace más poderoso)
-    attention2 = layers.MultiHeadAttention(
-        num_heads=Config.NUM_HEADS, 
-        key_dim=Config.EMBED_DIM
-    )(x, x)
-    x = layers.LayerNormalization()(x + attention2)
-    
-    ffn2 = keras.Sequential([
-        layers.Dense(Config.LATENT_DIM, activation="relu"),
-        layers.Dense(Config.EMBED_DIM)
-    ])(x)
-    x = layers.LayerNormalization()(x + ffn2)
-    
-    # Capa de salida
-    outputs = layers.Dense(Config.VOCAB_SIZE, activation="softmax")(x)
-    
-    model = keras.Model(inputs, outputs)
-    model.compile(
-        optimizer=keras.optimizers.Adam(Config.MODEL2_LR),  # LR más bajo
-        loss="sparse_categorical_crossentropy",
-        metrics=["accuracy"]
-    )
-    
-    print(f"✅ Modelo 2 creado: {model.count_params():,} parámetros")
-    return model
-
-# ============================================================================
-# PREPARACIÓN DE DATOS (COMPARTIDA)
-# ============================================================================
-
-def prepare_data():
+def prepare_imdb_data(sample_size=2000, verbose=True):
     """
     Prepara los datos de IMDb para entrenamiento.
-    Se usa para ambos modelos.
+    Función compartida por ambos modelos.
     """
-    print("📊 Preparando datos de IMDb...")
+    if verbose:
+        print("📊 PREPARANDO DATOS DE IMDB")
+        print("=" * 40)
+        print(f"📈 Muestras a procesar: {sample_size:,}")
+        print(f"🔤 Vocabulario máximo: 5,000 tokens")
+        print(f"📏 Secuencia máxima: 60 tokens")
     
-    # Cargar dataset
+    # Cargar dataset de IMDb
     (x_train, _), _ = keras.datasets.imdb.load_data()
     word_index = keras.datasets.imdb.get_word_index()
     reverse_word_index = dict([(value, key) for (key, value) in word_index.items()])
     
-    # Convertir a texto
+    # Función para decodificar reseñas
     def decode_review(text):
         return ' '.join([reverse_word_index.get(i - 3, '?') for i in text])
     
+    # Convertir a texto
     text_data = []
-    for i in range(min(Config.SAMPLE_SIZE, len(x_train))):
+    for i in range(min(sample_size, len(x_train))):
         review_text = decode_review(x_train[i])
         text_data.append(review_text)
     
-    # Crear vectorizador
-    dataset = tf.data.Dataset.from_tensor_slices(text_data).batch(Config.BATCH_SIZE)
+    if verbose:
+        print(f"✅ {len(text_data)} reseñas procesadas")
+    
+    # Crear dataset y vectorizador
+    dataset = tf.data.Dataset.from_tensor_slices(text_data).batch(32)
     
     text_vectorization = layers.TextVectorization(
-        max_tokens=Config.VOCAB_SIZE,
+        max_tokens=5000,
         output_mode="int",
-        output_sequence_length=Config.SEQUENCE_LENGTH,
+        output_sequence_length=60,
     )
     text_vectorization.adapt(dataset)
     
@@ -237,12 +79,13 @@ def prepare_data():
     
     train_dataset = dataset.map(prepare_sequences)
     
-    print("✅ Datos preparados")
+    if verbose:
+        print("✅ Dataset de entrenamiento preparado")
+    
     return train_dataset, text_vectorization
 
-def save_vectorizer(text_vectorization):
-    """Guardar el vectorizador para usar en la app"""
-    # Crear carpeta si no existe
+def save_vectorizer(text_vectorization, verbose=True):
+    """Guarda el vectorizador para usar en la aplicación"""
     os.makedirs("saved_models", exist_ok=True)
     
     vectorizer_data = {
@@ -254,171 +97,260 @@ def save_vectorizer(text_vectorization):
     with open("saved_models/text_vectorizer.pkl", "wb") as f:
         pickle.dump(vectorizer_data, f)
     
-    print("✅ Vectorizador guardado en saved_models/")
+    if verbose:
+        print("✅ Vectorizador guardado en saved_models/")
 
 # ============================================================================
-# FUNCIONES DE ENTRENAMIENTO
+# FUNCIÓN PRINCIPAL DE ENTRENAMIENTO
 # ============================================================================
 
-def train_model_1(train_dataset, text_vectorization):
-    """Entrenar específicamente el Modelo 1"""
-    print(f"\n🏋️ ENTRENANDO MODELO 1 ({Config.MODEL1_EPOCHS} épocas)")
-    print("=" * 50)
+def train_single_model(model_name, verbose=True):
+    """
+    Entrena un modelo específico.
     
-    # Crear carpeta si no existe
-    os.makedirs("saved_models", exist_ok=True)
+    Args:
+        model_name: "1" o "2"
+        verbose: Si mostrar información detallada
+        
+    Returns:
+        bool: True si el entrenamiento fue exitoso
+    """
+    if verbose:
+        print(f"🚀 INICIANDO ENTRENAMIENTO DEL MODELO {model_name}")
+        print("=" * 60)
     
-    # Crear modelo
-    model = create_model_1()
-    
-    # Callbacks para entrenamiento inteligente
-    callbacks = [
-        keras.callbacks.EarlyStopping(
-            monitor='loss', 
-            patience=5,  # Parar si no mejora en 5 épocas
-            restore_best_weights=True
-        ),
-        keras.callbacks.ReduceLROnPlateau(
-            monitor='loss',
-            factor=0.5,
-            patience=3
-        )
-    ]
-    
-    # Entrenar
-    history = model.fit(
-        train_dataset,
-        epochs=Config.MODEL1_EPOCHS,
-        callbacks=callbacks,
-        verbose=1
-    )
-    
-    # Guardar en la carpeta saved_models
-    model.save("saved_models/movie_model_1.keras")
-    save_vectorizer(text_vectorization)  # Guardar vectorizador también
-    
-    final_loss = min(history.history['loss'])
-    print(f"✅ Modelo 1 entrenado - Mejor loss: {final_loss:.4f}")
-    print("💾 Guardado como: saved_models/movie_model_1.keras")
-
-def train_model_2(train_dataset, text_vectorization):
-    """Entrenar específicamente el Modelo 2"""
-    print(f"\n🏋️ ENTRENANDO MODELO 2 ({Config.MODEL2_EPOCHS} épocas)")
-    print("=" * 50)
-    
-    # Crear carpeta si no existe
-    os.makedirs("saved_models", exist_ok=True)
-    
-    # Crear modelo
-    model = create_model_2()
-    
-    # Callbacks MÁS RESTRICTIVOS para evitar overfitting
-    callbacks = [
-        keras.callbacks.EarlyStopping(
-            monitor='loss', 
-            patience=3,  # MENOS paciencia
-            restore_best_weights=True
-        ),
-        keras.callbacks.ReduceLROnPlateau(
-            monitor='loss',
-            factor=0.7,  # Reducción más suave
-            patience=2
-        )
-    ]
-    
-    # Entrenar
-    history = model.fit(
-        train_dataset,
-        epochs=Config.MODEL2_EPOCHS,  # MENOS épocas
-        callbacks=callbacks,
-        verbose=1
-    )
-    
-    # Guardar en la carpeta saved_models
-    model.save("saved_models/movie_model_2.keras")
-    save_vectorizer(text_vectorization)
-    
-    final_loss = min(history.history['loss'])
-    print(f"✅ Modelo 2 entrenado - Mejor loss: {final_loss:.4f}")
-    print("💾 Guardado como: saved_models/movie_model_2.keras")
+    try:
+        # Preparar datos (común para ambos modelos)
+        train_dataset, text_vectorization = prepare_imdb_data(verbose=verbose)
+        
+        # Entrenar según el modelo seleccionado
+        if model_name == "1":
+            model, history = train_model_1(train_dataset, text_vectorization, verbose=verbose)
+        elif model_name == "2":
+            model, history = train_model_2(train_dataset, text_vectorization, verbose=verbose)
+        else:
+            raise ValueError(f"Modelo '{model_name}' no reconocido")
+        
+        # Guardar vectorizador
+        save_vectorizer(text_vectorization, verbose=verbose)
+        
+        if verbose:
+            print(f"\n🎉 ¡ENTRENAMIENTO DEL MODELO {model_name} COMPLETADO!")
+            print("🚀 Ahora puedes usar: streamlit run app.py")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error durante el entrenamiento: {str(e)}")
+        return False
 
 # ============================================================================
-# FUNCIÓN PRINCIPAL
+# ENTRENAR AMBOS MODELOS
 # ============================================================================
 
-def main():
-    """Función principal con argumentos de línea de comandos"""
-    parser = argparse.ArgumentParser(description='Entrenar modelos Transformer')
-    parser.add_argument('--modelo', choices=['1', '2', 'all'], required=True,
-                       help='Qué modelo entrenar: 1, 2, o all (ambos)')
+def train_both_models(verbose=True):
+    """
+    Entrena ambos modelos secuencialmente.
     
-    args = parser.parse_args()
+    Returns:
+        tuple: (éxito_modelo_1, éxito_modelo_2)
+    """
+    if verbose:
+        print("🚀 ENTRENAMIENTO DE AMBOS MODELOS")
+        print("=" * 60)
+        print("📋 Plan de entrenamiento:")
+        print("   1️⃣ Modelo 1 (Transformer Simple)")
+        print("   2️⃣ Modelo 2 (Transformer Doble)")
+        print()
     
-    print("🚀 ENTRENAMIENTO DE MODELOS TRANSFORMER")
-    print("=" * 50)
-    print(f"🎯 Entrenando: Modelo {args.modelo}")
-    print(f"📊 Configuración:")
-    print(f"   - Vocabulario: {Config.VOCAB_SIZE} tokens")
-    print(f"   - Secuencia: {Config.SEQUENCE_LENGTH} tokens")
-    print(f"   - Muestras: {Config.SAMPLE_SIZE}")
+    # Preparar datos una sola vez
+    train_dataset, text_vectorization = prepare_imdb_data(verbose=verbose)
     
-    # Preparar datos (común para ambos)
-    train_dataset, text_vectorization = prepare_data()
+    # Entrenar Modelo 1
+    if verbose:
+        print("\n" + "="*20 + " MODELO 1 " + "="*20)
     
-    # Entrenar según selección
-    if args.modelo == '1':
-        train_model_1(train_dataset, text_vectorization)
-    elif args.modelo == '2':
-        train_model_2(train_dataset, text_vectorization)
-    elif args.modelo == 'all':
-        train_model_1(train_dataset, text_vectorization)
-        print("\n" + "="*30 + " MODELO 2 " + "="*30)
-        train_model_2(train_dataset, text_vectorization)
+    success_1 = False
+    try:
+        model_1, history_1 = train_model_1(train_dataset, text_vectorization, verbose=verbose)
+        success_1 = True
+    except Exception as e:
+        print(f"❌ Error entrenando Modelo 1: {str(e)}")
     
-    print("\n🎉 ¡ENTRENAMIENTO COMPLETADO!")
-    print("🚀 Ahora puedes usar: streamlit run app.py")
+    # Entrenar Modelo 2
+    if verbose:
+        print("\n" + "="*20 + " MODELO 2 " + "="*20)
+    
+    success_2 = False
+    try:
+        model_2, history_2 = train_model_2(train_dataset, text_vectorization, verbose=verbose)
+        success_2 = True
+    except Exception as e:
+        print(f"❌ Error entrenando Modelo 2: {str(e)}")
+    
+    # Guardar vectorizador
+    save_vectorizer(text_vectorization, verbose=verbose)
+    
+    # Resumen final
+    if verbose:
+        print(f"\n🏁 RESUMEN FINAL")
+        print("=" * 30)
+        print(f"🤖 Modelo 1: {'✅ Éxito' if success_1 else '❌ Falló'}")
+        print(f"🤖 Modelo 2: {'✅ Éxito' if success_2 else '❌ Falló'}")
+        
+        if success_1 or success_2:
+            print(f"\n🚀 Ahora puedes usar: streamlit run app.py")
+    
+    return success_1, success_2
 
 # ============================================================================
-# MODO INTERACTIVO (si no se usan argumentos)
+# FUNCIONES DE INFORMACIÓN
+# ============================================================================
+
+def show_model_info(model_name):
+    """Muestra información detallada de un modelo"""
+    if model_name == "1":
+        Model1Config.print_info()
+    elif model_name == "2":
+        Model2Config.print_info()
+    else:
+        print(f"❌ Modelo '{model_name}' no reconocido")
+
+def show_models_status():
+    """Muestra el estado de los modelos guardados"""
+    print("📋 ESTADO DE MODELOS GUARDADOS")
+    print("=" * 35)
+    
+    models_dir = "saved_models"
+    model_1_path = f"{models_dir}/movie_model_1.keras"
+    model_2_path = f"{models_dir}/movie_model_2.keras"
+    vectorizer_path = f"{models_dir}/text_vectorizer.pkl"
+    
+    print(f"📁 Directorio: {'✅' if os.path.exists(models_dir) else '❌'} {models_dir}/")
+    print(f"🤖 Modelo 1: {'✅' if os.path.exists(model_1_path) else '❌'} movie_model_1.keras")
+    print(f"🤖 Modelo 2: {'✅' if os.path.exists(model_2_path) else '❌'} movie_model_2.keras")
+    print(f"🔧 Vectorizador: {'✅' if os.path.exists(vectorizer_path) else '❌'} text_vectorizer.pkl")
+    
+    available = []
+    if os.path.exists(model_1_path):
+        available.append("1")
+    if os.path.exists(model_2_path):
+        available.append("2")
+    
+    if available:
+        print(f"\n🎯 Modelos disponibles para usar: {', '.join(available)}")
+    else:
+        print(f"\n⚠️ No hay modelos entrenados. Ejecuta:")
+        print(f"   python train.py --model 1")
+
+def compare_models():
+    """Compara ambos modelos"""
+    print("⚖️ COMPARACIÓN DE MODELOS")
+    print("=" * 40)
+    
+    print("🤖 MODELO 1 - Simple:")
+    print("   - 1 capa Transformer")
+    print("   - ~7-8M parámetros")
+    print("   - 15 épocas, LR=0.001")
+    print("   - Más estable y rápido")
+    print("   - Ideal para principiantes")
+    
+    print("\n🤖 MODELO 2 - Doble:")
+    print("   - 2 capas Transformer")
+    print("   - ~12-13M parámetros")
+    print("   - 20 épocas, LR=0.0005")
+    print("   - Más creativo pero complejo")
+    print("   - Para usuarios avanzados")
+    
+    print("\n💡 Recomendación:")
+    print("   - Empieza con Modelo 1")
+    print("   - Experimenta con Modelo 2 después")
+
+# ============================================================================
+# MODO INTERACTIVO
 # ============================================================================
 
 def interactive_mode():
-    """Modo interactivo si se ejecuta sin argumentos"""
+    """Modo interactivo si no hay argumentos"""
     print("🎬 ENTRENADOR DE MODELOS DE RESEÑAS")
     print("=" * 40)
-    print("¿Qué modelo quieres entrenar?")
-    print("1. Modelo 1 (Simple, estable)")
-    print("2. Modelo 2 (Doble, más complejo)")
-    print("3. Ambos modelos")
-    print("4. Salir")
+    print("¿Qué quieres hacer?")
+    print("1. Entrenar Modelo 1 (Simple)")
+    print("2. Entrenar Modelo 2 (Doble)")
+    print("3. Entrenar ambos modelos")
+    print("4. Ver información Modelo 1")
+    print("5. Ver información Modelo 2")
+    print("6. Ver estado de modelos")
+    print("7. Comparar modelos")
+    print("8. Salir")
     
     while True:
-        choice = input("\nElige una opción (1-4): ").strip()
+        choice = input("\nElige una opción (1-8): ").strip()
         
-        if choice in ['1', '2', '3']:
-            # Preparar datos
-            train_dataset, text_vectorization = prepare_data()
-            
-            if choice == '1':
-                train_model_1(train_dataset, text_vectorization)
-            elif choice == '2':
-                train_model_2(train_dataset, text_vectorization)
-            elif choice == '3':
-                train_model_1(train_dataset, text_vectorization)
-                train_model_2(train_dataset, text_vectorization)
-            
-            print("\n✅ ¡Entrenamiento completado!")
+        if choice == '1':
+            train_single_model("1")
             break
-            
+        elif choice == '2':
+            train_single_model("2")
+            break
+        elif choice == '3':
+            train_both_models()
+            break
         elif choice == '4':
+            show_model_info("1")
+        elif choice == '5':
+            show_model_info("2")
+        elif choice == '6':
+            show_models_status()
+        elif choice == '7':
+            compare_models()
+        elif choice == '8':
             print("👋 ¡Hasta luego!")
             break
         else:
             print("❌ Opción no válida.")
 
-if __name__ == "__main__":
-    import sys
+# ============================================================================
+# FUNCIÓN PRINCIPAL CON ARGUMENTOS
+# ============================================================================
+
+def main():
+    """Función principal con argumentos de línea de comandos"""
+    parser = argparse.ArgumentParser(description='Entrenador de Modelos Transformer')
     
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument('--model', choices=['1', '2', 'both'], 
+                      help='Entrenar modelo específico: 1, 2, o both')
+    group.add_argument('--info', choices=['1', '2'],
+                      help='Mostrar información del modelo')
+    group.add_argument('--status', action='store_true',
+                      help='Mostrar estado de modelos guardados')
+    group.add_argument('--compare', action='store_true',
+                      help='Comparar ambos modelos')
+    
+    args = parser.parse_args()
+    
+    # Ejecutar según argumentos
+    if args.model:
+        if args.model == 'both':
+            train_both_models()
+        else:
+            train_single_model(args.model)
+    
+    elif args.info:
+        show_model_info(args.info)
+    
+    elif args.status:
+        show_models_status()
+    
+    elif args.compare:
+        compare_models()
+
+# ============================================================================
+# PUNTO DE ENTRADA
+# ============================================================================
+
+if __name__ == "__main__":
     # Si no hay argumentos, usar modo interactivo
     if len(sys.argv) == 1:
         interactive_mode()
