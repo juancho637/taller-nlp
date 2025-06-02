@@ -229,36 +229,3 @@ python src/train.py --model 1
 **Input:** `"The film presents"`  
 **Temperatura:** 1.0  
 **Output:** `"The film presents an innovative narrative structure that challenges conventional storytelling while maintaining audience engagement through unexpected plot developments."`
-
-## 🚀 Características Avanzadas
-
-### 🔧 Personalización
-- **Modifica configuraciones** en `model_1.py` y `model_2.py`
-- **Ajusta hiperparámetros** sin afectar otros modelos
-- **Experimenta con arquitecturas** independientemente
-
-### 📊 Monitoreo
-- **Información real** extraída del modelo cargado
-- **Sin datos hardcodeados** - todo dinámico
-- **Summary completo** de la arquitectura
-
-### ⚡ Escalabilidad
-- **Fácil agregar más modelos** siguiendo el patrón
-- **Estructura modular** permite experimentos
-- **Script centralizado** para coordinación
-
-## 🙏 Créditos
-
-- **Dataset:** IMDb Movie Reviews
-- **Framework:** TensorFlow/Keras
-- **Interfaz:** Streamlit
-- **Arquitectura:** Transformer ("Attention Is All You Need")
-- **Inspiración:** Proyectos de generación de texto con NLP
-
-## 📄 Licencia
-
-Este proyecto es de uso educativo. El dataset IMDb tiene sus propias condiciones de uso.
-
----
-
-**¿Necesitas ayuda?** Abre un issue o consulta la documentación de TensorFlow y Streamlit.
